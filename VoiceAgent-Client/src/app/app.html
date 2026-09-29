@@ -1,0 +1,67 @@
+<main class="phone">
+  <header class="caller">
+    <div class="avatar" [attr.data-state]="call.state()" aria-hidden="true">
+      <span class="avatar-initials">VA</span>
+    </div>
+    <h1>Virtual Assistant</h1>
+    <p class="status" role="status" aria-live="polite">
+      {{ statusLabel() }}
+      @if (call.inCall()) {
+        <span class="timer">· {{ duration() }}</span>
+      }
+    </p>
+  </header>
+
+  @if (!call.isSupported) {
+    <p class="notice">
+      Voice calls need speech recognition, which this browser does not support. Use Chrome or Edge
+      on desktop.
+    </p>
+  }
+
+  @if (call.error(); as error) {
+    <p class="notice notice-error" role="alert">{{ error }}</p>
+  }
+
+  <section class="transcript" aria-label="Call transcript">
+    @if (call.interim(); as interim) {
+      <p class="bubble bubble-user bubble-interim">{{ interim }}</p>
+    }
+    @for (turn of turnsNewestFirst(); track turn.id) {
+      <p class="bubble" [class.bubble-user]="turn.role === 'user'"
+        [class.bubble-assistant]="turn.role === 'assistant'">
+        @if (turn.content) {
+          {{ turn.content }}
+        } @else {
+          <span class="typing" aria-label="Assistant is thinking"><i></i><i></i><i></i></span>
+        }
+      </p>
+    } @empty {
+      <p class="empty">Press the call button and speak as you would on the phone.</p>
+    }
+  </section>
+
+  <footer class="controls">
+    @if (call.inCall()) {
+      <button type="button" class="round secondary" (click)="call.interrupt()"
+        [disabled]="!canInterrupt()" title="Stop the assistant and speak">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 6h3v12H7zM14 6h3v12h-3z" /></svg>
+        <span class="label">Interrupt</span>
+      </button>
+      <button type="button" class="round hang-up" (click)="call.hangUp()" title="Hang up">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85a.99.99 0 0 1-1.4-.01L.29 13.08A.97.97 0 0 1 0 12.37c0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.66c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48a.99.99 0 0 1-1.4.01 11.3 11.3 0 0 0-2.67-1.85.99.99 0 0 1-.56-.9v-3.1A15.1 15.1 0 0 0 12 9z" />
+        </svg>
+        <span class="label">Hang up</span>
+      </button>
+    } @else {
+      <button type="button" class="round call" (click)="call.startCall()"
+        [disabled]="!call.isSupported" title="Start call">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6.62 10.79a15.05 15.05 0 0 0 6.59 6.59l2.2-2.2a1 1 0 0 1 1.02-.24c1.12.37 2.33.57 3.57.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1.02l-2.2 2.2z" />
+        </svg>
+        <span class="label">Call</span>
+      </button>
+    }
+  </footer>
+</main>

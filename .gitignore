@@ -1,0 +1,20 @@
+# .NET build output
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+
+# Visual Studio
+.vs/
+
+# Node / Angular (the client has its own .gitignore too)
+node_modules/
+dist/
+.angular/
+
+# Claude Code per-machine settings
+.claude/settings.local.json
+
+# OS
+.DS_Store
+Thumbs.db

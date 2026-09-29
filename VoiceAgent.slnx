@@ -1,0 +1,18 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path="package.json" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="VoiceAgent.Api/VoiceAgent.Api.csproj" />
+    <Project Path="VoiceAgent.Application/VoiceAgent.Application.csproj" />
+    <Project Path="VoiceAgent.Domain/VoiceAgent.Domain.csproj" />
+    <Project Path="VoiceAgent.Infrastructure/VoiceAgent.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/test/" />
+  <Folder Name="/web/">
+    <Project Path="VoiceAgent-Client/VoiceAgent-Client.esproj">
+      <Build />
+      <Deploy />
+    </Project>
+  </Folder>
+</Solution>
