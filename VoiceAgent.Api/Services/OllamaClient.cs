@@ -2,12 +2,12 @@ using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Microsoft.Extensions.Options;
+using VoiceAgent.Api.Settings;
 using VoiceAgent.Api.Tools;
 
 namespace VoiceAgent.Api.Services;
 
-/// <summary>Typed HttpClient for Ollama's streaming chat endpoint (<c>POST /api/chat</c>).</summary>
+/// <summary>Ollama's streaming chat endpoint (<c>POST {BaseUrl}/api/chat</c>).</summary>
 public sealed class OllamaClient : IChatModel
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -16,15 +16,15 @@ public sealed class OllamaClient : IChatModel
     };
 
     private readonly HttpClient _http;
-    private readonly OllamaOptions _options;
+    private readonly OllamaSettings _settings;
 
-    public OllamaClient(HttpClient http, IOptions<OllamaOptions> options)
+    public OllamaClient(HttpClient http, OllamaSettings settings)
     {
         _http = http;
-        _options = options.Value;
+        _settings = settings;
     }
 
-    public string ModelName => _options.Model;
+    public string ModelName => $"{LlmProviders.Ollama}:{_settings.Model}";
 
     /// <summary>
     /// Streams one response. Ollama answers with NDJSON — one JSON object per line carrying a
@@ -37,12 +37,12 @@ public sealed class OllamaClient : IChatModel
     {
         var payload = new
         {
-            model = _options.Model,
+            model = _settings.Model,
             messages,
             tools = tools.Count > 0 ? tools.Select(OllamaTool.From).ToList() : null,
             stream = true,
         };
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/chat")
+        using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint(_settings.BaseUrl, "api/chat"))
         {
             Content = JsonContent.Create(payload, options: JsonOptions),
         };
@@ -54,7 +54,7 @@ public sealed class OllamaClient : IChatModel
         }
         catch (HttpRequestException ex)
         {
-            throw new ChatModelException($"Ollama is unreachable at {_http.BaseAddress}.", ex);
+            throw new ChatModelException($"Ollama is unreachable at {_settings.BaseUrl}.", ex);
         }
 
         using (response)
@@ -88,7 +88,7 @@ public sealed class OllamaClient : IChatModel
 
                 foreach (var call in chunk?.Message?.ToolCalls ?? [])
                 {
-                    yield return new ToolCallRequest(call.Function.Name, call.Function.Arguments);
+                    yield return new ToolCallRequest(call.Function.Name, call.Function.Arguments, call.Id);
                 }
 
                 if (chunk?.Done == true)
@@ -99,7 +99,28 @@ public sealed class OllamaClient : IChatModel
         }
     }
 
+    /// <summary>Lists installed models (<c>GET {baseUrl}/api/tags</c>).</summary>
+    /// <exception cref="ChatModelException">Ollama is unreachable or returns an error.</exception>
+    public static async Task<IReadOnlyList<ModelInfo>> ListModelsAsync(HttpClient http, string baseUrl, CancellationToken ct)
+    {
+        try
+        {
+            var tags = await http.GetFromJsonAsync<TagsResponse>(Endpoint(baseUrl, "api/tags"), JsonOptions, ct);
+            return (tags?.Models ?? []).Select(model => new ModelInfo(model.Name, model.Name)).ToList();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or UriFormatException)
+        {
+            throw new ChatModelException($"Could not list Ollama models at {baseUrl}: {ex.Message}", ex);
+        }
+    }
+
+    private static Uri Endpoint(string baseUrl, string path) => new(new Uri(baseUrl.TrimEnd('/') + "/"), path);
+
     private sealed record ChatChunk(ChatMessage? Message, bool Done, string? Error);
+
+    private sealed record TagsResponse(List<TagModel>? Models);
+
+    private sealed record TagModel(string Name);
 
     private sealed record OllamaTool(string Type, OllamaToolFunction Function)
     {
@@ -109,3 +130,7 @@ public sealed class OllamaClient : IChatModel
 
     private sealed record OllamaToolFunction(string Name, string Description, object Parameters);
 }
+
+/// <param name="Id">What to store in settings.</param>
+/// <param name="DisplayName">What to show in the model dropdown.</param>
+public sealed record ModelInfo(string Id, string DisplayName);

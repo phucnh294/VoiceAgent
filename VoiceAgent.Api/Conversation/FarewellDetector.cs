@@ -1,6 +1,4 @@
 using System.Text.RegularExpressions;
-using Microsoft.Extensions.Options;
-using VoiceAgent.Api.Services;
 
 namespace VoiceAgent.Api.Conversation;
 
@@ -11,7 +9,7 @@ namespace VoiceAgent.Api.Conversation;
 /// </summary>
 public sealed partial class FarewellDetector
 {
-    private static readonly string[] DefaultPhrases =
+    public static readonly IReadOnlyList<string> DefaultPhrases =
     [
         "bye", "goodbye", "good bye", "see you", "talk to you later", "that's all", "that is all",
         "hang up", "end the call", "end call", "quit", "i'm done", "i am done", "no more questions",
@@ -26,17 +24,8 @@ public sealed partial class FarewellDetector
 
     private const int NegationWindow = 3;
 
-    private readonly string[][] _phrases;
-
-    public FarewellDetector(IOptions<AssistantOptions> options)
-    {
-        var phrases = options.Value.EndCallPhrases is { Count: > 0 } configured
-            ? configured
-            : (IEnumerable<string>)DefaultPhrases;
-        _phrases = phrases.Select(Tokenize).Where(p => p.Length > 0).ToArray();
-    }
-
-    public bool IsFarewell(string utterance)
+    /// <param name="phrases">Configured phrases; empty uses <see cref="DefaultPhrases"/>.</param>
+    public bool IsFarewell(string utterance, IReadOnlyList<string> phrases)
     {
         var words = Tokenize(utterance);
         if (words.Length == 0 || words.Length > MaxWords)
@@ -44,9 +33,13 @@ public sealed partial class FarewellDetector
             return false;
         }
 
+        var tokenized = (phrases.Count > 0 ? phrases : DefaultPhrases)
+            .Select(Tokenize)
+            .Where(phrase => phrase.Length > 0)
+            .ToArray();
         for (var i = 0; i < words.Length; i++)
         {
-            foreach (var phrase in _phrases)
+            foreach (var phrase in tokenized)
             {
                 if (MatchesAt(words, i, phrase) && !IsNegated(words, i))
                 {

@@ -1,7 +1,10 @@
 /** BCP-47 language used for both recognition and speech synthesis. */
 export const CALL_LANGUAGE = 'en-US';
 
-/** Spoken as soon as the call connects, and kept as the first assistant turn. */
+/**
+ * Spoken as soon as the call connects. The greeting is normally set in the Settings panel; this
+ * is only used when the API's call settings can't be loaded.
+ */
 export const CALL_GREETING = 'Hello, thanks for calling. How can I help you today?';
 
 /** Spoken when a turn fails, so the caller is never left in silence. */

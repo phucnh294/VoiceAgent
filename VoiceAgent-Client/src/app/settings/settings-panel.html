@@ -1,0 +1,175 @@
+<aside class="panel" role="dialog" aria-label="Settings">
+  <header class="panel-head">
+    <h2>Settings</h2>
+    <button type="button" class="icon-btn" (click)="closed.emit()" aria-label="Close settings">✕</button>
+  </header>
+
+  @if (status(); as s) {
+    <p class="msg" [class.msg-error]="s.kind === 'error'" role="status">{{ s.text }}</p>
+  }
+
+  @if (draft(); as d) {
+    <div class="panel-body">
+      <details open>
+        <summary>Assistant</summary>
+        <label>System prompt (persona, business facts, speaking style)
+          <textarea rows="7" [(ngModel)]="d.assistant.systemPrompt"></textarea>
+        </label>
+        <small class="err">{{ err('assistant.systemPrompt') }}</small>
+        <label>Greeting (spoken when the call connects)
+          <input type="text" [(ngModel)]="d.assistant.greeting" />
+        </label>
+        <small class="err">{{ err('assistant.greeting') }}</small>
+        <label>Tool instructions (when to call which tool)
+          <textarea rows="4" [(ngModel)]="d.assistant.toolInstructions"></textarea>
+        </label>
+        <small class="hint">Active tools: {{ activeTools() || 'none' }}</small>
+        <details>
+          <summary>Advanced</summary>
+          <label>Goodbye instruction
+            <textarea rows="2" [(ngModel)]="d.assistant.farewellInstruction"></textarea>
+          </label>
+          <label>Goodbye phrases that end the call (one per line; empty = built-in English list)
+            <textarea rows="4" [(ngModel)]="phrasesText"></textarea>
+          </label>
+          <div class="row">
+            <label>History turns <input type="number" min="2" max="100" [(ngModel)]="d.assistant.maxHistoryMessages" /></label>
+            <label>Tool rounds <input type="number" min="1" max="10" [(ngModel)]="d.assistant.maxToolRounds" /></label>
+          </div>
+          <small class="err">{{ err('assistant.maxHistoryMessages') }} {{ err('assistant.maxToolRounds') }}</small>
+        </details>
+      </details>
+
+      <details open>
+        <summary>Model</summary>
+        <div class="choice">
+          <label><input type="radio" name="llm" value="ollama" [(ngModel)]="d.llm.provider" (change)="onProviderChange()" /> Ollama (local)</label>
+          <label><input type="radio" name="llm" value="gemini" [(ngModel)]="d.llm.provider" (change)="onProviderChange()" /> Google Gemini</label>
+        </div>
+
+        @if (d.llm.provider === 'ollama') {
+          <label>Ollama URL <input type="url" [(ngModel)]="d.llm.ollama.baseUrl" /></label>
+          <small class="err">{{ err('llm.ollama.baseUrl') }}</small>
+          <div class="row">
+            <label class="grow">Model
+              <select [(ngModel)]="d.llm.ollama.model">
+                @for (m of models(); track m.id) { <option [value]="m.id">{{ m.displayName }}</option> }
+                @if (!models().length) { <option [value]="d.llm.ollama.model">{{ d.llm.ollama.model }}</option> }
+              </select>
+            </label>
+            <button type="button" class="btn" (click)="refreshModels()">Load models</button>
+          </div>
+          <small class="err">{{ err('llm.ollama.model') }}</small>
+        } @else {
+          <label>Gemini API key
+            <input type="password" autocomplete="off" [(ngModel)]="geminiKeyInput"
+              [placeholder]="d.llm.gemini.apiKeySet ? 'Saved ' + d.llm.gemini.apiKeyHint + ' — leave blank to keep' : 'Paste your key from aistudio.google.com'" />
+          </label>
+          @if (d.llm.gemini.apiKeySet) {
+            <label class="inline"><input type="checkbox" [(ngModel)]="clearGeminiKey" /> Remove the saved key</label>
+          }
+          <small class="err">{{ err('llm.gemini.apiKey') }}</small>
+          <div class="row">
+            <label class="grow">Model
+              <select [(ngModel)]="d.llm.gemini.model">
+                <option value="" disabled>Choose a model…</option>
+                @for (m of models(); track m.id) { <option [value]="m.id">{{ m.displayName }}</option> }
+              </select>
+            </label>
+            <button type="button" class="btn" (click)="refreshModels()">Load models</button>
+          </div>
+          <small class="err">{{ err('llm.gemini.model') }}</small>
+        }
+        @if (modelsError(); as e) { <small class="err">{{ e }}</small> }
+      </details>
+
+      <details open>
+        <summary>Voice</summary>
+        <div class="choice">
+          <label><input type="radio" name="voice" value="kokoro" [(ngModel)]="d.voice.provider" (change)="refreshVoices()" /> Kokoro (natural, local)</label>
+          <label><input type="radio" name="voice" value="browser" [(ngModel)]="d.voice.provider" /> Browser voice</label>
+        </div>
+
+        @if (d.voice.provider === 'kokoro') {
+          <label>Kokoro URL <input type="url" [(ngModel)]="d.voice.kokoro.baseUrl" /></label>
+          <small class="err">{{ err('voice.kokoro.baseUrl') }}</small>
+          <div class="row">
+            <label class="grow">Voice
+              <select [(ngModel)]="d.voice.kokoro.voice">
+                @for (v of kokoroVoices(); track v) { <option [value]="v">{{ v }}</option> }
+                @if (!kokoroVoices().length) { <option [value]="d.voice.kokoro.voice">{{ d.voice.kokoro.voice }}</option> }
+              </select>
+            </label>
+            <button type="button" class="btn" (click)="refreshVoices()">Load voices</button>
+          </div>
+          @if (voicesError(); as e) { <small class="err">{{ e }}</small> }
+          <label>Speed {{ d.voice.kokoro.speed }}×
+            <input type="range" min="0.5" max="2" step="0.05" [(ngModel)]="d.voice.kokoro.speed" />
+          </label>
+        } @else {
+          <label>Voice
+            <select [(ngModel)]="d.voice.browser.voiceName">
+              <option [ngValue]="null">Browser default</option>
+              @for (v of browserVoices(); track v.name) { <option [ngValue]="v.name">{{ v.name }}</option> }
+            </select>
+          </label>
+          <label>Speed {{ d.voice.browser.rate }}×
+            <input type="range" min="0.5" max="2" step="0.05" [(ngModel)]="d.voice.browser.rate" />
+          </label>
+        }
+        <button type="button" class="btn" (click)="testVoice()" [disabled]="testing()">
+          {{ testing() ? 'Playing…' : 'Test voice' }}
+        </button>
+      </details>
+
+      <details open>
+        <summary>Tools</summary>
+        <label class="inline"><input type="checkbox" [(ngModel)]="d.tools.endCallEnabled" /> end_call — hang up when the caller says goodbye</label>
+        <label class="inline"><input type="checkbox" [(ngModel)]="d.tools.dateTimeEnabled" /> get_current_datetime — tell the real date and time</label>
+
+        @for (w of d.tools.webhooks; track $index; let i = $index) {
+          <fieldset class="tool">
+            <legend>
+              <label class="inline"><input type="checkbox" [(ngModel)]="w.enabled" /> {{ w.name || 'New tool' }}</label>
+              <button type="button" class="link danger" (click)="removeWebhook(i)">Remove</button>
+            </legend>
+            <label>Name (the model calls it by this) <input type="text" [(ngModel)]="w.name" placeholder="lookup_order" /></label>
+            <small class="err">{{ err('tools.webhooks[' + i + '].name') }}</small>
+            <label>Description (when to use it)
+              <textarea rows="2" [(ngModel)]="w.description" placeholder="Look up the status of an order when the caller gives an order number."></textarea>
+            </label>
+            <small class="err">{{ err('tools.webhooks[' + i + '].description') }}</small>
+            <label>Webhook URL (receives a JSON POST) <input type="url" [(ngModel)]="w.url" placeholder="https://example.com/tools/lookup-order" /></label>
+            <small class="err">{{ err('tools.webhooks[' + i + '].url') }}</small>
+            <label>Parameters (JSON Schema)
+              <textarea rows="6" class="mono" [(ngModel)]="paramsText[i]" (blur)="checkParams(i)"></textarea>
+            </label>
+            <small class="err">{{ paramsErrors()[i] }} {{ err('tools.webhooks[' + i + '].parameters') }}</small>
+            <div class="headers">
+              <span>Headers</span>
+              @for (h of w.headers; track $index) {
+                <div class="row">
+                  <input type="text" [(ngModel)]="h.name" placeholder="Authorization" />
+                  <input type="password" autocomplete="off" [(ngModel)]="h.value"
+                    [placeholder]="h.valueSet ? 'Saved ' + h.valueHint + ' — blank keeps it' : 'Bearer …'" />
+                </div>
+              }
+              <button type="button" class="link" (click)="addHeader(w)">+ Add header</button>
+            </div>
+            <label>Timeout (seconds) <input type="number" min="1" max="60" [(ngModel)]="w.timeoutSeconds" /></label>
+          </fieldset>
+        }
+        <button type="button" class="btn" (click)="addWebhook()">+ Add webhook tool</button>
+      </details>
+    </div>
+
+    <footer class="panel-foot">
+      <button type="button" class="btn" (click)="closed.emit()">Close</button>
+      <button type="button" class="btn primary" (click)="save()" [disabled]="saving()">
+        {{ saving() ? 'Saving…' : 'Save' }}
+      </button>
+    </footer>
+  } @else if (!status()) {
+    <p class="msg">Loading…</p>
+  }
+</aside>

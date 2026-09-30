@@ -5,16 +5,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project purpose
 
 VoiceAgent is a browser-based voice assistant for a **virtual representative**: the user speaks, the
-browser does speech-to-text (STT), the text is sent to an LLM, and the streamed answer is read
-back with text-to-speech (TTS) in the browser. STT and TTS run client-side (Web Speech API); the
-backend only brokers the LLM call.
+browser does speech-to-text (Web Speech API), the text goes to an LLM (Ollama or Google Gemini) that
+can call tools, and the streamed answer is spoken with Kokoro TTS (proxied by the API) or the
+browser's `speechSynthesis` as fallback. Model, voice, prompts and tools are runtime settings
+edited in the UI.
 
 ## Layout
 
 `VoiceAgent.slnx` (Visual Studio solution, new XML format) ties together:
 
 - `VoiceAgent.Api/` — ASP.NET Core Web API on **.NET 10** (`net10.0`): `Controllers/`,
-  `Conversation/` (reply + tool loop), `Tools/`, `Services/` (Ollama client, options).
+  `Settings/` (runtime settings store), `Conversation/` (reply + tool loop), `Tools/`,
+  `Services/` (Ollama/Gemini chat models, Kokoro client), `CallLogging/`.
+- `docker-compose.tts.yml` — Kokoro TTS container on :8880.
 - `VoiceAgent.Application/`, `VoiceAgent.Domain/`, `VoiceAgent.Infrastructure/` — empty Clean
   Architecture placeholders (`Class1.cs` only). The Api does **not** reference them yet. When moving
   logic out of the Api, the intended direction is Api → Application → Domain, with Infrastructure
@@ -51,10 +54,23 @@ npm start
 dotnet build VoiceAgent.slnx
 ```
 
-The backend needs an **Ollama** server. `VoiceAgent.Api/appsettings.json` sets `Ollama:BaseUrl`
-(currently `http://localhost:8001`) and `Ollama:Model` (`qwen2.5:0.5b-instruct`); the model must be
-pulled on that server. The first turn after Ollama starts is slow (~15s model load); warm turns
-start streaming in under a second. `Assistant:SystemPrompt` holds the representative's persona.
+**Runtime settings** (model provider + model + Gemini key, voice, system prompt, greeting, tool
+instructions, built-in tool toggles, webhook tools) live in `VoiceAgent.Api/data/settings.json`
+(git-ignored; holds secrets), edited through the Settings panel (`/api/settings`, `[LocalOnly]`).
+`SettingsStore` seeds that file on first run from the `Ollama`/`Assistant` sections of
+`appsettings.json`; after that those sections are ignored — change settings via the panel/API or
+delete `data/settings.json` to re-seed. Current setup: Ollama at `http://localhost:8001`
+(`qwen2.5:0.5b-instruct`, in Docker container `rag-llm-model`); the first turn after Ollama starts
+is slow (~15s model load).
+
+**Kokoro TTS**: Docker Desktop's organization policy on this machine denies every `ghcr.io` pull
+(Docker Hub and nvcr.io work), so `docker-compose.tts.yml` builds Kokoro from the official source
+cloned at `../Kokoro-FastAPI` (`kokoro-fastapi-cpu:local`, container `kokoro-tts`, port 8880). Don't
+try to bypass the policy. The CPU build is slow on this laptop (~3.5–4.5s per sentence); a GPU
+variant is available as `--profile gpu` (Quadro T2000 passthrough works) but its first build
+downloads ~6–8 GB — that build once filled C: and crashed Docker, after which Docker's disk image
+was moved to `D:\Docker\DockerDesktopWSL`. If Kokoro is down, the app falls back to the browser voice
+per sentence and shows a notice.
 
 Frontend (from `VoiceAgent-Client/`):
 
@@ -105,18 +121,35 @@ zoneless, so UI state must be signals).
    `ToolInstructions` as a second system message, then the last `MaxHistoryMessages` turns, then
    `FarewellInstruction` when the caller is leaving — and runs the **tool loop** (up to
    `MaxToolRounds`): `IServerTool` results are fed back to the model; `IClientTool` calls are
-   forwarded to the browser as `action` events. Add a tool by implementing one of those interfaces
-   in `VoiceAgent.Api/Tools/` and registering it as `IAssistantTool` in `Program.cs`.
+   forwarded to the browser as `action` events. Each turn takes one `ISettingsProvider.Current`
+   snapshot and gets its model from `IChatModelResolver` and its tools from `IToolRegistry`
+   (built-ins if enabled + one `WebhookTool` per enabled webhook), so settings saves apply from the
+   next turn. `WebhookTool` POSTs `{tool, arguments, callId}` with the configured headers and
+   per-tool timeout, returns the body (≤ 4,000 chars) to the model, and turns failures into
+   `Error: …` results instead of throwing.
 7. `FarewellDetector` is a deterministic backstop: small models answer "Bye!" without calling
-   `end_call`, so a short (≤ 12 words), non-negated caller utterance matching
-   `Assistant:EndCallPhrases` also emits `end_call`.
-8. `OllamaClient` (implements `IChatModel`) calls Ollama `POST /api/chat` with `tools` and
-   `stream: true`; tool calls arrive as `message.tool_calls` in the NDJSON stream.
-9. `SentenceBuffer` turns fragments into whole sentences so `SpeechSpeakerService` starts talking on
-   the first sentence. The speaker queues on its own promise chain (so `cancel()` drops everything)
-   and holds the live utterance (Chrome otherwise GCs it and never fires `onend`).
+   `end_call`, so a short (≤ 12 words), non-negated caller utterance matching the configured
+   goodbye phrases also emits `end_call` (only when `end_call` is enabled).
+8. Chat models (`IChatModel`, created per turn): `OllamaClient` → Ollama `POST /api/chat` (NDJSON,
+   `message.tool_calls`); `GeminiChatModel` → `streamGenerateContent?alt=sse` with
+   `x-goog-api-key`. The Gemini mapping merges all system messages into `systemInstruction`, maps
+   tool results to `functionResponse` parts, merges consecutive same-role turns, prepends a user
+   placeholder because calls open with the assistant's greeting, sends schemas as
+   `parametersJsonSchema` (omitted for no-arg tools), and round-trips each function call's
+   `thoughtSignature` (`ChatToolCall.ThoughtSignature`, `[JsonIgnore]` so Ollama never sees it).
+9. `SentenceBuffer` turns fragments into whole sentences for `SpeechSpeakerService`. With Kokoro it
+   requests each sentence's MP3 from `POST /api/speech` as soon as it's queued (prefetch) but plays
+   in order on its promise chain; if Kokoro fails it speaks that sentence with `speechSynthesis`
+   and sets `warning`. `cancel()` aborts pending fetches, stops audio, and bumps a generation
+   counter. `VoiceCallService.refreshCallSettings()` (`GET /api/call-settings`: greeting + voice,
+   no secrets) runs at call start and after the Settings panel saves.
+10. **Settings panel** (`src/app/settings/`, gear button): template-driven forms (`FormsModule`) on
+   a draft object held in a signal. Secrets are write-only: the API returns `apiKeySet`/`apiKeyHint`
+   (and `valueSet`/`valueHint` for webhook headers) and on PUT treats `null` = keep, `""` = clear,
+   anything else = replace; webhooks carry a stable `id` so header secrets survive renames.
+   `SettingsValidator` returns field paths (`tools.webhooks[0].name`) shown inline.
 
-10. **Call log**: `ConversationService` writes every model request (full `messages`, system prompt
+11. **Call log**: `ConversationService` writes every model request (full `messages`, system prompt
     included), model response, tool call and a per-turn summary to `ICallLog`
     (`JsonlCallLog` → `VoiceAgent.Api/logs/calls/<date>/<callId>.jsonl`, git-ignored). The browser
     creates the call ID (`crypto.randomUUID()`), sends it as `callId` on every turn, and on hang-up
@@ -125,17 +158,26 @@ zoneless, so UI state must be signals).
     iterator's `finally` with status `cancelled` and the partial text. Disable with
     `CallLog:Enabled=false` (swaps in `NullCallLog`).
 
-`qwen2.5:0.5b-instruct` is too small for reliable tool use: it never called `end_call` in testing
+`qwen2.5:0.5b-instruct` is unreliable with built-in tools: it never called `end_call` in testing
 (the backstop covers it) and called `get_current_datetime` only occasionally, inventing the time
-otherwise. Larger models call tools properly.
+otherwise. It did call a well-described webhook tool (`lookup_order`) correctly 3/3 times.
 
-Tunables: `src/app/voice/voice.config.ts` (greeting, farewells, language, idle timeout, echo
-threshold, history size) and the API's `Assistant` section (persona, tool rules, farewell phrases,
-history and tool-round caps).
+Tunables: `src/app/voice/voice.config.ts` (language, idle timeout, echo threshold, fallback
+greeting/farewells, history size); everything else is in the Settings panel.
 
 API tests: `dotnet test VoiceAgent.Api.Tests`; single class:
-`dotnet test VoiceAgent.Api.Tests --filter "FullyQualifiedName~FarewellDetectorTests"`.
-`ConversationService` is tested against a scripted `IChatModel` fake, not a real Ollama.
+`dotnet test VoiceAgent.Api.Tests --filter "FullyQualifiedName~GeminiChatModelTests"`.
+`ConversationService` is tested with fake `IChatModelResolver`/`IToolRegistry`/`ISettingsProvider`;
+Gemini, webhook and Kokoro HTTP are tested with fake `HttpMessageHandler`s, never the network.
+
+Client specs can't run under Vitest inside the Claude Code sandbox (workers time out). They were
+verified by bundling them with esbuild and running them under Node with a small
+describe/it/expect shim; `speech-speaker.service.spec.ts` fakes `fetch`, `Audio` and
+`speechSynthesis`.
+
+When writing Markdown or code containing backticks through Bash, never put it inside a
+double-quoted `node -e "…"` string: bash runs the backticks as command substitution. Use the
+Edit/Write tools instead.
 
 CORS is wide open (`AllowAnyOrigin`) in `Program.cs`, though the dev proxy makes it unnecessary.
 `WeatherForecastController` / `WeatherForecast.cs` / `VoiceAgent.Api.http` are template leftovers.

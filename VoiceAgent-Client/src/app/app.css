@@ -6,6 +6,7 @@
 }
 
 .phone {
+  position: relative;
   max-width: 420px;
   height: min(760px, calc(100vh - 48px));
   margin: 0 auto;

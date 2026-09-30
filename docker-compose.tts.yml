@@ -1,0 +1,47 @@
+# Local text-to-speech server (Kokoro, OpenAI-compatible /v1/audio/speech API) on port 8880.
+#
+# The official images (ghcr.io/remsky/kokoro-fastapi-*) can't be pulled on machines whose Docker
+# Desktop policy blocks ghcr.io, so these build from the official source instead (base images
+# come from Docker Hub / nvcr.io). One-time setup, next to this repo:
+#   git clone --depth 1 https://github.com/remsky/Kokoro-FastAPI.git ../Kokoro-FastAPI
+#
+# CPU (default, works everywhere):  docker compose -f docker-compose.tts.yml up -d
+# GPU (NVIDIA, much faster):        docker compose -f docker-compose.tts.yml --profile gpu up -d kokoro-tts-gpu
+#   The GPU build downloads ~6-8 GB (CUDA + PyTorch) into Docker's disk image; make sure the drive
+#   holding it has room (Docker Desktop → Settings → Resources → Disk image location).
+# Check:                            curl http://localhost:8880/v1/audio/voices
+# Run only one of the two services: both use port 8880. The API reaches it through the Kokoro URL
+# in Settings.
+services:
+  kokoro-tts:
+    image: kokoro-fastapi-cpu:local
+    build:
+      context: ../Kokoro-FastAPI
+      dockerfile: docker/cpu/Dockerfile.optimized
+      args:
+        # Japanese needs a ~526MB dictionary; the calls here are English.
+        INCLUDE_JAPANESE: "false"
+    container_name: kokoro-tts
+    ports:
+      - "8880:8880"
+    restart: unless-stopped
+
+  kokoro-tts-gpu:
+    profiles: [gpu]
+    image: kokoro-fastapi-gpu:local
+    build:
+      context: ../Kokoro-FastAPI
+      dockerfile: docker/gpu/Dockerfile.optimized
+      args:
+        INCLUDE_JAPANESE: "false"
+    container_name: kokoro-tts-gpu
+    ports:
+      - "8880:8880"
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

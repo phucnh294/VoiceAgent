@@ -1,5 +1,6 @@
-import { Component, computed, inject } from '@angular/core';
+import { Component, computed, inject, signal } from '@angular/core';
 
+import { SpeechSpeakerService } from './voice/speech-speaker.service';
 import { CallEndReason, CallState, VoiceCallService } from './voice/voice-call.service';
 
 const STATUS_LABELS: Record<CallState, string> = {
@@ -25,6 +26,8 @@ const END_LABELS: Record<CallEndReason, string> = {
 })
 export class App {
   protected readonly call = inject(VoiceCallService);
+  protected readonly speaker = inject(SpeechSpeakerService);
+  protected readonly settingsOpen = signal(false);
 
   protected readonly statusLabel = computed(() => {
     const reason = this.call.endReason();

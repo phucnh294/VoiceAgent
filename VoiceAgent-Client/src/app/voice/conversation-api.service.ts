@@ -1,5 +1,7 @@
 import { Injectable } from '@angular/core';
 
+import { CallSettings } from '../settings/settings.models';
+
 export type ChatRole = 'user' | 'assistant';
 
 export interface ChatTurn {
@@ -69,6 +71,15 @@ export class ConversationApiService {
     } finally {
       reader.releaseLock();
     }
+  }
+
+  /** Greeting and voice choice for a call. */
+  async getCallSettings(): Promise<CallSettings> {
+    const response = await fetch('/api/call-settings');
+    if (!response.ok) {
+      throw new Error(`Could not load call settings (HTTP ${response.status}).`);
+    }
+    return (await response.json()) as CallSettings;
   }
 
   /**

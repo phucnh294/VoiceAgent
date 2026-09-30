@@ -35,3 +35,107 @@ body {
   color: var(--text);
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 }
+
+/* Settings button on the call screen */
+.gear {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  padding: 6px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.gear svg {
+  width: 22px;
+  height: 22px;
+  fill: currentColor;
+}
+
+/* Form controls, scoped to the Settings panel */
+app-settings-panel label {
+  display: block;
+  margin: 8px 0 2px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+app-settings-panel label.inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+}
+
+app-settings-panel input[type='text'],
+app-settings-panel input[type='url'],
+app-settings-panel input[type='password'],
+app-settings-panel input[type='number'],
+app-settings-panel select,
+app-settings-panel textarea {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+app-settings-panel input[type='range'] {
+  width: 100%;
+}
+
+app-settings-panel textarea {
+  resize: vertical;
+}
+
+app-settings-panel .btn {
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--secondary);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+app-settings-panel .btn.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+app-settings-panel .btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+app-settings-panel .icon-btn {
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+
+app-settings-panel .link {
+  border: none;
+  background: none;
+  padding: 4px 0;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+app-settings-panel .link.danger {
+  color: var(--error-text);
+}

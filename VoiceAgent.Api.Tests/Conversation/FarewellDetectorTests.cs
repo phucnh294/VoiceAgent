@@ -1,12 +1,10 @@
-using Microsoft.Extensions.Options;
 using VoiceAgent.Api.Conversation;
-using VoiceAgent.Api.Services;
 
 namespace VoiceAgent.Api.Tests.Conversation;
 
 public class FarewellDetectorTests
 {
-    private readonly FarewellDetector _detector = new(Options.Create(new AssistantOptions()));
+    private readonly FarewellDetector _detector = new();
 
     [Theory]
     [InlineData("Okay thanks, that's all. Bye!")]
@@ -18,7 +16,7 @@ public class FarewellDetectorTests
     [InlineData("I'm done, see you")]
     public void IsFarewell_FarewellPhrase_ReturnsTrue(string utterance)
     {
-        Assert.True(_detector.IsFarewell(utterance));
+        Assert.True(_detector.IsFarewell(utterance, []));
     }
 
     [Theory]
@@ -30,18 +28,15 @@ public class FarewellDetectorTests
     [InlineData("My wife said I should quit my old phone plan and move everything over to your company")]
     public void IsFarewell_NotAFarewell_ReturnsFalse(string utterance)
     {
-        Assert.False(_detector.IsFarewell(utterance));
+        Assert.False(_detector.IsFarewell(utterance, []));
     }
 
     [Fact]
     public void IsFarewell_ConfiguredPhrases_ReplaceDefaults()
     {
-        var detector = new FarewellDetector(Options.Create(new AssistantOptions
-        {
-            EndCallPhrases = ["tam biet"],
-        }));
+        string[] phrases = ["tam biet"];
 
-        Assert.True(detector.IsFarewell("Tam biet!"));
-        Assert.False(detector.IsFarewell("bye"));
+        Assert.True(_detector.IsFarewell("Tam biet!", phrases));
+        Assert.False(_detector.IsFarewell("bye", phrases));
     }
 }

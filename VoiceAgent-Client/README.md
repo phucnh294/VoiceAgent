@@ -4,9 +4,12 @@ A browser voice assistant that works like a phone call with a virtual representa
 **Call**, speak naturally, and the assistant answers out loud. The conversation keeps going turn
 after turn until you press **Hang up**.
 
-- **Speech-to-text and text-to-speech** run in the browser (Web Speech API).
-- **Answers** come from a local LLM served by [Ollama](https://ollama.com), through an ASP.NET
-  Core API.
+- **Speech-to-text** runs in the browser (Web Speech API).
+- **Answers** come from a local [Ollama](https://ollama.com) model or Google Gemini, through an
+  ASP.NET Core API, and the model can call tools (built-in or your own webhooks).
+- **The voice** is [Kokoro](https://github.com/remsky/Kokoro-FastAPI), a local, human-sounding
+  text-to-speech server, with the browser's built-in voice as a fallback.
+- **Model, voice, prompt and tools** are changed at runtime in the Settings panel.
 
 This folder is the Angular front end. The API lives next to it in `../VoiceAgent.Api`.
 
@@ -17,37 +20,45 @@ This folder is the Angular front end. The API lives next to it in `../VoiceAgent
 ```
 VoiceAgent/
 ├── VoiceAgent.slnx                 Visual Studio solution (API + client)
+├── docker-compose.tts.yml          Kokoro text-to-speech server (port 8880)
 ├── VoiceAgent.Api/                 ASP.NET Core API (.NET 10)
 │   ├── Controllers/
-│   │   └── ConversationController.cs   POST /api/conversation/stream (NDJSON events)
+│   │   ├── ConversationController.cs   POST /api/conversation/stream (NDJSON events)
+│   │   ├── SettingsController.cs       /api/settings (+ models, voices), local-only
+│   │   └── SpeechController.cs         POST /api/speech (Kokoro), GET /api/call-settings
+│   ├── Settings/                       runtime settings: store, masked view, validation
 │   ├── Conversation/
 │   │   ├── ConversationService.cs      builds the prompt, runs the tool loop
 │   │   ├── FarewellDetector.cs         ends the call on "bye" even if the model forgets
 │   │   └── ConversationEvent.cs        text / action / error events
 │   ├── Tools/
-│   │   ├── AssistantTools.cs           IServerTool / IClientTool interfaces
+│   │   ├── ToolRegistry.cs             active tools per turn, from settings
+│   │   ├── WebhookTool.cs              your HTTP tools defined in the Settings panel
 │   │   ├── EndCallTool.cs              end_call (runs in the browser)
 │   │   └── CurrentDateTimeTool.cs      get_current_datetime (runs on the server)
-│   ├── CallLogging/                    per-call JSON Lines log (prompts, responses, tools)
 │   ├── Services/
-│   │   ├── OllamaClient.cs             streams replies + tool calls from Ollama /api/chat
-│   │   ├── IChatModel.cs               model abstraction (faked in tests)
-│   │   ├── OllamaOptions.cs            "Ollama" config section
-│   │   └── AssistantOptions.cs         "Assistant" config section
-│   ├── Properties/launchSettings.json  ports + launch profiles
+│   │   ├── OllamaClient.cs             Ollama /api/chat (streaming, tools)
+│   │   ├── GeminiChatModel.cs          Gemini streamGenerateContent (streaming, tools)
+│   │   ├── ChatModelResolver.cs        picks the model for each turn from settings
+│   │   └── KokoroClient.cs             Kokoro speech + voice list
+│   ├── CallLogging/                    per-call JSON Lines log (prompts, responses, tools)
+│   ├── appsettings.json                first-run defaults, call log options
+│   └── data/settings.json              runtime settings incl. API keys (git-ignored)
+├── VoiceAgent.Api.Tests/           xUnit tests for the API
 ├── VoiceAgent.Application/ .Domain/ .Infrastructure/   empty placeholders (future layering)
 └── VoiceAgent-Client/              this Angular 21 app
     ├── proxy.conf.json             forwards /api → API on :5043
     └── src/app/
-        ├── app.ts / app.html / app.css     phone-call screen
+        ├── app.ts / app.html / app.css     phone-call screen (gear opens Settings)
+        ├── settings/                       Settings panel + its API service
         └── voice/
             ├── voice-call.service.ts       the call loop, barge-in, idle timeout, end call
             ├── speech-recognizer.service.ts   speech-to-text (microphone)
-            ├── speech-speaker.service.ts      text-to-speech (speaker)
+            ├── speech-speaker.service.ts      Kokoro / browser voice, sentence queue
             ├── sentence-buffer.ts             splits streamed text into sentences
             ├── echo-filter.ts                 ignores the assistant's own voice on the mic
             ├── conversation-api.service.ts    reads the NDJSON reply stream
-            └── voice.config.ts                greeting, language, timeouts
+            └── voice.config.ts                language, timeouts, fallbacks
 ```
 
 ---
@@ -109,11 +120,11 @@ Tools the assistant has:
 |---|---|---|
 | `end_call` | browser | Says the farewell and hangs up. |
 | `get_current_datetime` | API | Returns the real local date and time, so the assistant doesn't guess. |
+| your webhook tools | your server | Anything you expose over HTTP, e.g. an order lookup; see [Webhook tools](#webhook-tools). |
 
-To add a tool, implement `IServerTool` (runs in the API; its result goes back to the model) or
-`IClientTool` (forwarded to the browser as an `action` event) in `VoiceAgent.Api/Tools/`, and
-register it in `Program.cs` with `AddSingleton<IAssistantTool, YourTool>()`. A client tool also
-needs handling in `voice-call.service.ts`.
+Both built-ins can be switched off in the Settings panel, and webhook tools need no code. For a
+tool that does need code, implement `IServerTool` (runs in the API) or `IClientTool` (forwarded
+to the browser as an `action` event) in `VoiceAgent.Api/Tools/` and add it in `ToolRegistry`.
 
 The full design (decisions, gotchas, verification) is in
 [`rag-ai-local/functionality-docs/09292026/01_voice-call-architecture.md`](../rag-ai-local/functionality-docs/09292026/01_voice-call-architecture.md).
@@ -126,57 +137,102 @@ The full design (decisions, gotchas, verification) is in
 |---|---|
 | [.NET 10 SDK](https://dotnet.microsoft.com/download) | Runs the API |
 | [Node.js](https://nodejs.org) 20+ and npm | Runs the Angular app |
-| [Ollama](https://ollama.com), with a model pulled | Generates the answers |
 | **Chrome or Edge on desktop**, with a microphone | Web Speech recognition; Chrome's speech recognition needs internet |
+| A model: [Ollama](https://ollama.com) with a model pulled, **or** a [Gemini API key](https://aistudio.google.com/apikey) | Generates the answers |
+| Optional: [Docker](https://www.docker.com) for the Kokoro voice | Human-sounding voice; without it the browser's built-in voice is used |
 
-Pull the model the API is configured for, on the Ollama server it points to:
+For Ollama, pull a model on the server the API points to, e.g. `ollama pull qwen2.5:0.5b-instruct`
+(bigger models answer and use tools much better).
+
+### Kokoro voice (optional, recommended)
+
+[Kokoro](https://github.com/remsky/Kokoro-FastAPI) is a local text-to-speech server with natural
+voices. The compose file in the repo root builds it from the official source, because the
+published image on `ghcr.io` can't be pulled where Docker Desktop's organization policy blocks
+that registry. The build only needs Docker Hub base images.
 
 ```bash
-ollama pull qwen2.5:0.5b-instruct
+# one-time: clone the Kokoro source next to this repo
+git clone --depth 1 https://github.com/remsky/Kokoro-FastAPI.git ../Kokoro-FastAPI
+
+# build (first time ~10-20 min, downloads the model) and start on port 8880
+docker compose -f docker-compose.tts.yml up -d
+curl http://localhost:8880/v1/audio/voices     # lists voices such as af_heart, bf_emma
 ```
+
+Until Kokoro is reachable, the assistant speaks with the browser voice and shows a notice. The
+container restarts with Docker (`restart: unless-stopped`).
 
 ---
 
 ## Configuration
 
-### API: `VoiceAgent.Api/appsettings.json`
+### Settings panel (runtime)
 
-```json
-"Ollama": {
-  "BaseUrl": "http://localhost:8001",
-  "Model": "qwen2.5:0.5b-instruct"
-},
-"Assistant": {
-  "SystemPrompt": "You are a friendly virtual representative talking with a caller on a live voice call. …",
-  "ToolInstructions": "You have tools. When the caller asks the time, day or date, call get_current_datetime …",
-  "FarewellInstruction": "The caller is ending the call. Reply with one short, warm goodbye sentence only …",
-  "MaxHistoryMessages": 20,
-  "MaxToolRounds": 3,
-  "EndCallPhrases": ["bye", "goodbye", "that's all", "hang up", "quit", "…"]
-}
+Click the **gear** at the top right of the call screen. Changes apply from the assistant's next
+reply, even during a call; there is no restart.
+
+| Section | What you can change |
+|---|---|
+| **Assistant** | System prompt (persona, business facts, speaking style), greeting, tool instructions. Advanced: goodbye instruction, goodbye phrases that end the call, history size, tool rounds. |
+| **Model** | Ollama (URL + model picked from the installed models) or Google Gemini (API key + model picked from the models your key can use). |
+| **Voice** | Kokoro (voice picker, speed 0.5–2×) or the browser voice (voice picker, speed). **Test voice** plays the greeting with the unsaved choice. |
+| **Tools** | Turn `end_call` / `get_current_datetime` on or off, and add your own **webhook tools** (below). |
+
+Settings are saved by the API in `VoiceAgent.Api/data/settings.json`, which is git-ignored because
+it holds API keys. API keys and webhook header values are **write-only**: after saving, the
+panel only shows "Saved …a1b2"; leave the field blank to keep the saved value. The settings
+endpoints only accept requests from the machine running the API.
+
+On the very first start the file is created from the `Ollama` and `Assistant` sections of
+`appsettings.json`; after that, `appsettings.json` no longer changes the model or prompts. Edit
+them in the panel, or delete `data/settings.json` to re-seed.
+
+### Webhook tools
+
+A webhook tool lets the model fetch or do something through your own HTTP endpoint. Define it in
+**Settings → Tools → Add webhook tool**:
+
+- **Name**: what the model calls, e.g. `lookup_order` (letters, digits, underscores).
+- **Description**: when to use it. The model decides based on this, so be specific.
+- **Parameters**: a JSON Schema of the arguments, e.g.
+  `{"type":"object","properties":{"orderId":{"type":"string"}},"required":["orderId"]}`.
+- **URL**, optional **headers** (e.g. `Authorization: Bearer …`, stored as secrets) and a
+  **timeout**.
+
+Also mention the tool in **Tool instructions** ("When the caller asks about an order, call
+lookup_order"); small models rely on that.
+
+When the model calls the tool, the API sends:
+
+```http
+POST https://your-server/orders
+Content-Type: application/json
+Authorization: Bearer …
+
+{"tool":"lookup_order","arguments":{"orderId":"A1234"},"callId":"dd0d0195-…"}
 ```
+
+Whatever your endpoint returns (JSON or text, up to 4,000 characters) is given to the model, which
+turns it into a spoken answer. A non-2xx status, an unreachable URL or a timeout is reported to the
+model as an error, so it can apologise instead of making something up. Every call, argument and
+result is recorded in the [call log](#call-logs).
+
+### API: `VoiceAgent.Api/appsettings.json`
 
 | Key | What it does |
 |---|---|
-| `Ollama:BaseUrl` | Address of your Ollama server. Ollama's own default is `http://localhost:11434`; this project currently points to `8001`. |
-| `Ollama:Model` | Model used for replies. It must already be pulled on that server. Bigger models (e.g. `qwen2.5:3b-instruct`) give much better answers **and use tools reliably**; the 0.5B model rarely calls tools. |
-| `Assistant:SystemPrompt` | The representative's persona and speaking style. Add your company name, services, opening hours, etc. here; no code change is needed. Keep the "short spoken sentences, no markdown" rules, because everything is read aloud. |
-| `Assistant:ToolInstructions` | When to use which tool. Sent as a separate system message after the persona, which small models follow more often. Update it when you add a tool. |
-| `Assistant:FarewellInstruction` | Added when the caller says goodbye, so the model answers with a goodbye instead of another question. |
-| `Assistant:MaxHistoryMessages` | How many recent turns are sent to the model. Higher gives more memory but slower replies. |
-| `Assistant:MaxToolRounds` | Maximum model → tool → model round trips per reply, so a confused model can't loop forever. |
-| `Assistant:EndCallPhrases` | Caller phrases that end the call. They only count in short utterances (12 words or fewer) and not after a negation ("don't hang up"). An empty list uses the built-in phrases. Change them if the call language changes. |
+| `Ollama:*`, `Assistant:*` | **First-run defaults only** for the settings file (see above). |
+| `Settings:FilePath` | Where runtime settings are saved; default `data/settings.json` (relative to `VoiceAgent.Api/`). |
 | `CallLog:Enabled` | Write a log file per call (see [Call logs](#call-logs)). Default `true`. |
 | `CallLog:Directory` | Where call logs go, relative to `VoiceAgent.Api/`. Default `logs/calls`. |
-
-Restart the API after changing these settings.
 
 ### Client: `src/app/voice/voice.config.ts`
 
 | Constant | What it does |
 |---|---|
 | `CALL_LANGUAGE` | Speech language for listening and speaking (`en-US`). If you change it, also tell the model in `SystemPrompt` to reply in that language. |
-| `CALL_GREETING` | First sentence spoken when the call connects. |
+| `CALL_GREETING` | Fallback greeting, used only if the call settings can't be loaded (the real one is set in the Settings panel). |
 | `CALL_ERROR_REPLY` | What the assistant says when a reply fails. |
 | `CALL_FAREWELL` | Goodbye spoken when the model ends the call without saying anything. |
 | `IDLE_TIMEOUT_SECONDS` | Silence (no speech or typing) before the call ends; default 60. |
@@ -330,7 +386,10 @@ The reply is NDJSON, one event per line:
 | "Speech recognition is not supported" | Use Chrome or Edge on desktop. Firefox and Safari aren't supported. |
 | "Microphone access was denied" | Allow the microphone in the browser's site settings, then press Call again. Use `127.0.0.1` or `localhost`; a LAN IP over http can't use the microphone. |
 | "Speech recognition needs an internet connection" | Chrome's recognition runs on Google's servers. Connect to the internet. |
-| Answers are poor or off-topic | The 0.5B model is very small. Set a larger `Ollama:Model` and make `SystemPrompt` more specific. |
+| Answers are poor or off-topic | The 0.5B model is very small. Pick a larger Ollama model or Gemini in Settings, and make the system prompt more specific. |
+| "The Kokoro voice is unavailable…" notice | The Kokoro container isn't running or isn't reachable at the Kokoro URL in Settings. See [Kokoro voice](#kokoro-voice-optional-recommended). |
+| Gemini: "API key not valid", or no models listed | Check the key at aistudio.google.com/apikey, save it again, then click **Load models**. |
+| Settings: "can only be changed from the machine running the API" | The settings endpoints are local-only. Open the app on the same machine as the API. |
 | Assistant gives a wrong time or date | The model answered without calling `get_current_datetime`. The 0.5B model often skips tools; use a larger model. |
 | Assistant keeps interrupting itself | The microphone hears the speakers. Use headphones, turn off "Interrupt by voice", or lower `ECHO_WORD_OVERLAP`. |
 | Call ends when you didn't mean to | A short sentence contained a goodbye phrase. Edit `Assistant:EndCallPhrases`. |

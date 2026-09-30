@@ -7,6 +7,9 @@
 # Call logs: full caller transcripts, never commit
 logs/
 
+# Runtime settings incl. API keys (VoiceAgent.Api/data/settings.json), never commit
+data/
+
 # Visual Studio
 .vs/
 

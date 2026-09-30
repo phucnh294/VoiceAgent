@@ -6,6 +6,7 @@ import {
   ConversationApiService,
   ReplyEvent,
 } from './conversation-api.service';
+import { CallSettings } from '../settings/settings.models';
 import { isLikelyEcho } from './echo-filter';
 import { SentenceBuffer } from './sentence-buffer';
 import { SpeechRecognizerService } from './speech-recognizer.service';
@@ -118,11 +119,30 @@ export class VoiceCallService {
     this.startTimer();
     this.state.set('speaking');
 
-    const greeting = await this.assistantTurn(callId, () => fixedReply(CALL_GREETING));
+    const greetingText = (await this.refreshCallSettings())?.greeting || CALL_GREETING;
+    if (!this.isCurrent(callId)) {
+      return;
+    }
+    const greeting = await this.assistantTurn(callId, () => fixedReply(greetingText));
     if (!this.isCurrent(callId)) {
       return;
     }
     await this.runCallLoop(callId, greeting.kind === 'interrupted' ? greeting.input : null);
+  }
+
+  /**
+   * Reloads the greeting and voice from the API. Called at call start and after the Settings
+   * panel saves, so a voice change applies from the next sentence even mid-call.
+   */
+  async refreshCallSettings(): Promise<CallSettings | null> {
+    try {
+      const settings = await this.api.getCallSettings();
+      this.speaker.configure(settings.voice);
+      return settings;
+    } catch (err) {
+      console.warn('Using default call settings', err);
+      return null;
+    }
   }
 
   hangUp(reason: CallEndReason = 'caller'): void {

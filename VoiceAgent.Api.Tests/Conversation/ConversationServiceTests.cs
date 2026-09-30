@@ -1,10 +1,10 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using VoiceAgent.Api.CallLogging;
 using VoiceAgent.Api.Conversation;
 using VoiceAgent.Api.Services;
+using VoiceAgent.Api.Settings;
 using VoiceAgent.Api.Tools;
 
 namespace VoiceAgent.Api.Tests.Conversation;
@@ -225,21 +225,39 @@ public class ConversationServiceTests
 
     private static ConversationService CreateService(ScriptedChatModel model, ICallLog log, int maxToolRounds = 3)
     {
-        var options = Options.Create(new AssistantOptions
+        var settings = new AgentSettings
         {
-            SystemPrompt = "You are a test assistant.",
-            ToolInstructions = ToolInstructions,
-            FarewellInstruction = FarewellInstruction,
-            MaxToolRounds = maxToolRounds,
-        });
+            Assistant = new AssistantSettings
+            {
+                SystemPrompt = "You are a test assistant.",
+                ToolInstructions = ToolInstructions,
+                FarewellInstruction = FarewellInstruction,
+                MaxToolRounds = maxToolRounds,
+            },
+        };
         return new ConversationService(
-            model,
-            [new EndCallTool(), new StubServerTool()],
-            new FarewellDetector(options),
+            new FixedModelResolver(model),
+            new FixedToolRegistry([new EndCallTool(), new StubServerTool()]),
+            new FarewellDetector(),
             log,
             TimeProvider.System,
-            options,
+            new FixedSettings(settings),
             NullLogger<ConversationService>.Instance);
+    }
+
+    private sealed class FixedSettings(AgentSettings settings) : ISettingsProvider
+    {
+        public AgentSettings Current => settings;
+    }
+
+    private sealed class FixedModelResolver(IChatModel model) : IChatModelResolver
+    {
+        public IChatModel Resolve(LlmSettings settings) => model;
+    }
+
+    private sealed class FixedToolRegistry(IReadOnlyList<IAssistantTool> tools) : IToolRegistry
+    {
+        public IReadOnlyList<IAssistantTool> Build(ToolSettings settings, Guid callId) => tools;
     }
 
     /// <summary>Keeps call log records in memory, in write order.</summary>
