@@ -27,8 +27,10 @@ files:
 version: 1
 last_updated: 2026-09-29
 extraction_method: authored-from-implementation
-related_docs: []
+related_docs: [rag-ai-local/functionality-docs/09292026/02_voice-call-tools-endcall-bargein.md]
 ---
+
+> **Update:** the reply stream, tool calling, end-call, idle timeout and barge-in changed after this doc was written; see `02_voice-call-tools-endcall-bargein.md`. Sections below that describe a plain-text stream or half-duplex behaviour are superseded there.
 
 ## TL;DR
 - **What:** A phone-call-style voice assistant ("virtual representative"). The caller presses Call and talks hands-free; the browser transcribes speech, a local Ollama LLM answers, and the browser speaks the answer back, turn after turn, until the caller hangs up.

@@ -8,7 +8,9 @@
     <Project Path="VoiceAgent.Domain/VoiceAgent.Domain.csproj" />
     <Project Path="VoiceAgent.Infrastructure/VoiceAgent.Infrastructure.csproj" />
   </Folder>
-  <Folder Name="/test/" />
+  <Folder Name="/test/">
+    <Project Path="VoiceAgent.Api.Tests/VoiceAgent.Api.Tests.csproj" />
+  </Folder>
   <Folder Name="/web/">
     <Project Path="VoiceAgent-Client/VoiceAgent-Client.esproj">
       <Build />

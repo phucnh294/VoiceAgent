@@ -13,14 +13,15 @@ backend only brokers the LLM call.
 
 `VoiceAgent.slnx` (Visual Studio solution, new XML format) ties together:
 
-- `VoiceAgent.Api/` — ASP.NET Core Web API on **.NET 10** (`net10.0`). The only project with real code.
+- `VoiceAgent.Api/` — ASP.NET Core Web API on **.NET 10** (`net10.0`): `Controllers/`,
+  `Conversation/` (reply + tool loop), `Tools/`, `Services/` (Ollama client, options).
 - `VoiceAgent.Application/`, `VoiceAgent.Domain/`, `VoiceAgent.Infrastructure/` — empty Clean
   Architecture placeholders (`Class1.cs` only). The Api does **not** reference them yet. When moving
   logic out of the Api, the intended direction is Api → Application → Domain, with Infrastructure
   (e.g. the Ollama client) implementing Application abstractions.
 - `VoiceAgent-Client/` — Angular 21 front end (NgModule-based, `standalone: false` schematics),
   wrapped in a `.esproj` so Visual Studio can launch it.
-- The solution has an empty `/test/` folder — there are no .NET test projects yet.
+- `VoiceAgent.Api.Tests/` — xUnit tests for the API (solution folder `/test/`).
 - Root `package.json` is a placeholder solution item (`{ "private": true }`), not a real npm project.
 
 ## Commands
@@ -76,29 +77,65 @@ The UI is a phone-call metaphor: press Call, talk hands-free, Hang up. All logic
 `VoiceAgent-Client/src/app/voice/`; `App` only renders `VoiceCallService` signals (the app is
 zoneless, so UI state must be signals).
 
-1. `VoiceCallService` runs the loop: speak greeting → **listening** → **thinking** → **speaking** →
-   listening … until `hangUp()`. The mic is off while the assistant speaks, so it never hears
-   itself; `interrupt()` cuts a reply short and returns to listening.
-2. `SpeechRecognizerService` wraps Web Speech recognition (Chrome/Edge desktop only) with
+1. `VoiceCallService` runs the loop: greeting → **listening** → **thinking** → **speaking** →
+   listening … until the call ends. Every wait for the caller goes through `listenOnce()`, which
+   races one recognition session against typed text (`sendText()`), the idle deadline and stop
+   signals, so every kind of caller input is handled the same way.
+2. **Barge-in**: during an assistant turn, `watchForCaller()` keeps listening (when
+   `voiceInterrupt` is on) and accepts typed text. Heard speech that mostly repeats the reply's
+   words is treated as the assistant's own voice (`echo-filter.ts`). Real speech or typed text cuts
+   the turn off (aborts the fetch, cancels speech), marks the partial reply `interrupted`, and
+   becomes the next user turn. The Interrupt button cuts off and returns to normal listening.
+3. **Ending the call**: an `end_call` action from the API → speak the farewell (the tool's
+   `farewell` argument or `CALL_FAREWELL` if the model said nothing) → `hangUp('goodbye')`.
+   **Idle**: no caller speech or typing for `IDLE_TIMEOUT_SECONDS` (60) while listening → spoken
+   `IDLE_GOODBYE` → `hangUp('idle')`, with a countdown shown for the last 15s.
+4. `SpeechRecognizerService` wraps Web Speech recognition (Chrome/Edge desktop only) with
    `continuous = false`: the browser ends the session when the caller pauses, which is the
-   turn-taking signal. Silence (`no-speech`) just re-listens; only permission/device/network errors
-   end the call.
-3. `ConversationApiService` `fetch`es `POST /api/conversation/stream` with the whole call history
-   `{ messages: [{ role: 'user'|'assistant', content }] }` — the API is stateless, the client owns
-   history. `fetch` is used instead of `HttpClient` to read the body incrementally.
-4. `ConversationController` rejects any role other than user/assistant (400), prepends
-   `Assistant:SystemPrompt`, trims to `MaxHistoryMessages`, and writes each token as plain UTF-8
-   text, flushing per token. Ollama failures before the first byte → 502; after it the stream just
-   ends.
-5. `OllamaClient` (typed `HttpClient`) calls Ollama `POST /api/chat` with `stream: true` and parses
-   its **NDJSON** (one JSON object per line, `message.content` fragment, `done: true` at the end).
-6. Back in the client, `SentenceBuffer` turns fragments into whole sentences so
-   `SpeechSpeakerService` starts talking on the first sentence while the rest streams in. The
-   speaker queues sentences on its own promise chain (so `cancel()` drops everything) and keeps a
-   reference to the live utterance (Chrome otherwise GCs it and never fires `onend`).
+   turn-taking signal. Only one session may run at a time, so `listen()` aborts and awaits the
+   previous one first, and takes a cancel signal so an unwanted session never starts. Silence
+   (`no-speech`) just re-listens; only permission/device/network errors end the call.
+5. `ConversationApiService` `fetch`es `POST /api/conversation/stream` with the whole history
+   `{ messages: [{ role: 'user'|'assistant', content }] }` (the API is stateless) and parses the
+   **NDJSON** reply: `{"type":"text","text"}`, `{"type":"action","name":"end_call","arguments"}`,
+   `{"type":"error","message"}`.
+6. API: `ConversationController` rejects any role other than user/assistant (400) and writes
+   `ConversationService` events as NDJSON (failure before the first event → 502; after it → an
+   `error` event). `ConversationService` builds the prompt — `SystemPrompt`, then
+   `ToolInstructions` as a second system message, then the last `MaxHistoryMessages` turns, then
+   `FarewellInstruction` when the caller is leaving — and runs the **tool loop** (up to
+   `MaxToolRounds`): `IServerTool` results are fed back to the model; `IClientTool` calls are
+   forwarded to the browser as `action` events. Add a tool by implementing one of those interfaces
+   in `VoiceAgent.Api/Tools/` and registering it as `IAssistantTool` in `Program.cs`.
+7. `FarewellDetector` is a deterministic backstop: small models answer "Bye!" without calling
+   `end_call`, so a short (≤ 12 words), non-negated caller utterance matching
+   `Assistant:EndCallPhrases` also emits `end_call`.
+8. `OllamaClient` (implements `IChatModel`) calls Ollama `POST /api/chat` with `tools` and
+   `stream: true`; tool calls arrive as `message.tool_calls` in the NDJSON stream.
+9. `SentenceBuffer` turns fragments into whole sentences so `SpeechSpeakerService` starts talking on
+   the first sentence. The speaker queues on its own promise chain (so `cancel()` drops everything)
+   and holds the live utterance (Chrome otherwise GCs it and never fires `onend`).
 
-Tunables: greeting, error reply, language and history size are in `src/app/voice/voice.config.ts`;
-persona and server-side history cap in the API's `Assistant` config section.
+10. **Call log**: `ConversationService` writes every model request (full `messages`, system prompt
+    included), model response, tool call and a per-turn summary to `ICallLog`
+    (`JsonlCallLog` → `VoiceAgent.Api/logs/calls/<date>/<callId>.jsonl`, git-ignored). The browser
+    creates the call ID (`crypto.randomUUID()`), sends it as `callId` on every turn, and on hang-up
+    POSTs `/api/conversation/{callId}/end` with the reason and its own transcript (greeting and
+    idle goodbye never pass through the API). A turn cut short by the browser is logged in the
+    iterator's `finally` with status `cancelled` and the partial text. Disable with
+    `CallLog:Enabled=false` (swaps in `NullCallLog`).
+
+`qwen2.5:0.5b-instruct` is too small for reliable tool use: it never called `end_call` in testing
+(the backstop covers it) and called `get_current_datetime` only occasionally, inventing the time
+otherwise. Larger models call tools properly.
+
+Tunables: `src/app/voice/voice.config.ts` (greeting, farewells, language, idle timeout, echo
+threshold, history size) and the API's `Assistant` section (persona, tool rules, farewell phrases,
+history and tool-round caps).
+
+API tests: `dotnet test VoiceAgent.Api.Tests`; single class:
+`dotnet test VoiceAgent.Api.Tests --filter "FullyQualifiedName~FarewellDetectorTests"`.
+`ConversationService` is tested against a scripted `IChatModel` fake, not a real Ollama.
 
 CORS is wide open (`AllowAnyOrigin`) in `Program.cs`, though the dev proxy makes it unnecessary.
 `WeatherForecastController` / `WeatherForecast.cs` / `VoiceAgent.Api.http` are template leftovers.

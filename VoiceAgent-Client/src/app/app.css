@@ -34,6 +34,11 @@
   font-size: 0.95rem;
 }
 
+.status-warning {
+  color: var(--error-text);
+  font-weight: 600;
+}
+
 .timer {
   font-variant-numeric: tabular-nums;
 }
@@ -133,6 +138,17 @@
   font-style: italic;
 }
 
+.tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  opacity: 0.7;
+  vertical-align: middle;
+}
+
 .empty {
   margin: auto;
   color: var(--muted);
@@ -161,12 +177,68 @@
   30% { opacity: 1; }
 }
 
+.composer {
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px 0;
+  border-top: 1px solid var(--border);
+}
+
+.message-input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.message-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.send {
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+
+.send svg {
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+}
+
 .controls {
   display: flex;
   justify-content: center;
   gap: 40px;
-  padding: 20px 16px 28px;
-  border-top: 1px solid var(--border);
+  padding: 16px 16px 28px;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 16px 16px;
+  font-size: 0.85rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.hint {
+  opacity: 0.8;
 }
 
 .round {

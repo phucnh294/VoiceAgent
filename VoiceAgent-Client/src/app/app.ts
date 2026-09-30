@@ -1,12 +1,20 @@
 import { Component, computed, inject } from '@angular/core';
 
-import { CallState, VoiceCallService } from './voice/voice-call.service';
+import { CallEndReason, CallState, VoiceCallService } from './voice/voice-call.service';
 
 const STATUS_LABELS: Record<CallState, string> = {
   idle: 'Ready to call',
   listening: 'Listening…',
   thinking: 'Thinking…',
   speaking: 'Speaking…',
+};
+
+const END_LABELS: Record<CallEndReason, string> = {
+  caller: 'Call ended',
+  goodbye: 'Call ended — goodbye',
+  idle: 'Call ended after no response',
+  error: 'Call ended because of an error',
+  closed: 'Call ended',
 };
 
 @Component({
@@ -18,7 +26,17 @@ const STATUS_LABELS: Record<CallState, string> = {
 export class App {
   protected readonly call = inject(VoiceCallService);
 
-  protected readonly statusLabel = computed(() => STATUS_LABELS[this.call.state()]);
+  protected readonly statusLabel = computed(() => {
+    const reason = this.call.endReason();
+    if (this.call.state() === 'idle' && reason) {
+      return END_LABELS[reason];
+    }
+    const idleLeft = this.call.idleSecondsLeft();
+    if (idleLeft !== null) {
+      return `No response — ending in ${idleLeft}s`;
+    }
+    return STATUS_LABELS[this.call.state()];
+  });
 
   protected readonly duration = computed(() => {
     const total = this.call.elapsedSeconds();
@@ -33,4 +51,13 @@ export class App {
   protected readonly canInterrupt = computed(
     () => this.call.state() === 'thinking' || this.call.state() === 'speaking',
   );
+
+  protected send(input: HTMLInputElement): void {
+    this.call.sendText(input.value);
+    input.value = '';
+  }
+
+  protected toggleVoiceInterrupt(event: Event): void {
+    this.call.voiceInterrupt.set((event.target as HTMLInputElement).checked);
+  }
 }

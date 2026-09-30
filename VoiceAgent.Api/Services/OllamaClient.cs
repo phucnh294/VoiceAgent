@@ -1,14 +1,19 @@
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Options;
+using VoiceAgent.Api.Tools;
 
 namespace VoiceAgent.Api.Services;
 
 /// <summary>Typed HttpClient for Ollama's streaming chat endpoint (<c>POST /api/chat</c>).</summary>
-public sealed class OllamaClient
+public sealed class OllamaClient : IChatModel
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
 
     private readonly HttpClient _http;
     private readonly OllamaOptions _options;
@@ -19,16 +24,24 @@ public sealed class OllamaClient
         _options = options.Value;
     }
 
+    public string ModelName => _options.Model;
+
     /// <summary>
-    /// Streams the assistant reply token by token. Ollama answers with NDJSON — one JSON object
-    /// per line carrying a <c>message.content</c> fragment — until a line with <c>done: true</c>.
+    /// Streams one response. Ollama answers with NDJSON — one JSON object per line carrying a
+    /// <c>message.content</c> fragment and/or <c>message.tool_calls</c> — until <c>done: true</c>.
     /// </summary>
-    /// <exception cref="OllamaException">Ollama is unreachable or reports an error.</exception>
-    public async IAsyncEnumerable<string> StreamChatAsync(
+    public async IAsyncEnumerable<ChatStreamItem> StreamChatAsync(
         IReadOnlyList<ChatMessage> messages,
+        IReadOnlyList<ToolDefinition> tools,
         [EnumeratorCancellation] CancellationToken ct)
     {
-        var payload = new { model = _options.Model, messages, stream = true };
+        var payload = new
+        {
+            model = _options.Model,
+            messages,
+            tools = tools.Count > 0 ? tools.Select(OllamaTool.From).ToList() : null,
+            stream = true,
+        };
         using var request = new HttpRequestMessage(HttpMethod.Post, "/api/chat")
         {
             Content = JsonContent.Create(payload, options: JsonOptions),
@@ -41,7 +54,7 @@ public sealed class OllamaClient
         }
         catch (HttpRequestException ex)
         {
-            throw new OllamaException($"Ollama is unreachable at {_http.BaseAddress}.", ex);
+            throw new ChatModelException($"Ollama is unreachable at {_http.BaseAddress}.", ex);
         }
 
         using (response)
@@ -49,7 +62,7 @@ public sealed class OllamaClient
             if (!response.IsSuccessStatusCode)
             {
                 var body = await response.Content.ReadAsStringAsync(ct);
-                throw new OllamaException($"Ollama returned {(int)response.StatusCode}: {body}");
+                throw new ChatModelException($"Ollama returned {(int)response.StatusCode}: {body}");
             }
 
             await using var stream = await response.Content.ReadAsStreamAsync(ct);
@@ -65,12 +78,17 @@ public sealed class OllamaClient
                 var chunk = JsonSerializer.Deserialize<ChatChunk>(line, JsonOptions);
                 if (chunk?.Error is { } error)
                 {
-                    throw new OllamaException($"Ollama error: {error}");
+                    throw new ChatModelException($"Ollama error: {error}");
                 }
 
                 if (!string.IsNullOrEmpty(chunk?.Message?.Content))
                 {
-                    yield return chunk.Message.Content;
+                    yield return new TextDelta(chunk.Message.Content);
+                }
+
+                foreach (var call in chunk?.Message?.ToolCalls ?? [])
+                {
+                    yield return new ToolCallRequest(call.Function.Name, call.Function.Arguments);
                 }
 
                 if (chunk?.Done == true)
@@ -82,4 +100,12 @@ public sealed class OllamaClient
     }
 
     private sealed record ChatChunk(ChatMessage? Message, bool Done, string? Error);
+
+    private sealed record OllamaTool(string Type, OllamaToolFunction Function)
+    {
+        public static OllamaTool From(ToolDefinition tool) =>
+            new("function", new OllamaToolFunction(tool.Name, tool.Description, tool.Parameters));
+    }
+
+    private sealed record OllamaToolFunction(string Name, string Description, object Parameters);
 }

@@ -14,6 +14,9 @@ const FATAL_ERRORS: Record<string, string> = {
   network: 'Speech recognition needs an internet connection in this browser.',
 };
 
+/** Pause before reporting a session that failed to start, so callers can't spin in a hot loop. */
+const START_FAILURE_BACKOFF_MS = 300;
+
 /** Speech-to-text via the browser's Web Speech API (Chrome / Edge desktop). */
 @Injectable({ providedIn: 'root' })
 export class SpeechRecognizerService {
@@ -23,19 +26,28 @@ export class SpeechRecognizerService {
   })();
 
   private active: SpeechRecognitionLike | null = null;
+  /** Settles when the most recent session has fully ended; the browser allows one at a time. */
+  private lastSessionEnded: Promise<void> = Promise.resolve();
 
   get isSupported(): boolean {
     return this.ctor !== undefined;
   }
 
   /**
-   * Listens for one caller turn. The browser ends the session on its own once the caller pauses,
-   * which is what gives the call its turn-taking. Resolves with the final transcript — an empty
-   * string if nothing was said — and rejects only on errors that retrying cannot fix.
+   * Listens for one caller utterance. The browser ends the session on its own once the caller
+   * pauses, which is what gives the call its turn-taking. Resolves with the final transcript — an
+   * empty string if nothing was said or the session was aborted — and rejects only on errors that
+   * retrying cannot fix. Aborting `cancel` stops the session, or keeps it from starting at all.
    */
-  listen(onInterim: (text: string) => void): Promise<string> {
+  async listen(onInterim: (text: string) => void, cancel?: AbortSignal): Promise<string> {
     if (!this.ctor) {
-      return Promise.reject(new Error('Speech recognition is not supported in this browser.'));
+      throw new Error('Speech recognition is not supported in this browser.');
+    }
+
+    this.abort();
+    await this.lastSessionEnded;
+    if (cancel?.aborted) {
+      return '';
     }
 
     const recognition = new this.ctor();
@@ -43,6 +55,9 @@ export class SpeechRecognizerService {
     recognition.continuous = false;
     recognition.interimResults = true;
     recognition.maxAlternatives = 1;
+
+    let markEnded: () => void = () => {};
+    this.lastSessionEnded = new Promise((resolve) => (markEnded = resolve));
 
     return new Promise((resolve, reject) => {
       let finalText = '';
@@ -69,10 +84,15 @@ export class SpeechRecognizerService {
         }
       };
 
+      const onCancel = () => recognition.abort();
+      cancel?.addEventListener('abort', onCancel, { once: true });
+
       recognition.onend = () => {
+        cancel?.removeEventListener('abort', onCancel);
         if (this.active === recognition) {
           this.active = null;
         }
+        markEnded();
         if (fatal) {
           reject(fatal);
         } else {
@@ -81,13 +101,20 @@ export class SpeechRecognizerService {
       };
 
       this.active = recognition;
-      recognition.start();
+      try {
+        recognition.start();
+      } catch (err) {
+        console.warn('Speech recognition failed to start', err);
+        cancel?.removeEventListener('abort', onCancel);
+        this.active = null;
+        markEnded();
+        setTimeout(() => resolve(''), START_FAILURE_BACKOFF_MS);
+      }
     });
   }
 
-  /** Stops listening immediately and discards anything heard so far. */
+  /** Stops listening immediately; the pending `listen()` resolves with what was heard so far. */
   abort(): void {
     this.active?.abort();
-    this.active = null;
   }
 }

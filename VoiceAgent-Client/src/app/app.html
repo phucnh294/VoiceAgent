@@ -4,7 +4,8 @@
       <span class="avatar-initials">VA</span>
     </div>
     <h1>Virtual Assistant</h1>
-    <p class="status" role="status" aria-live="polite">
+    <p class="status" [class.status-warning]="call.idleSecondsLeft() !== null" role="status"
+      aria-live="polite">
       {{ statusLabel() }}
       @if (call.inCall()) {
         <span class="timer">· {{ duration() }}</span>
@@ -35,11 +36,27 @@
         } @else {
           <span class="typing" aria-label="Assistant is thinking"><i></i><i></i><i></i></span>
         }
+        @if (turn.interrupted) {
+          <span class="tag">interrupted</span>
+        }
+        @if (turn.typed) {
+          <span class="tag">typed</span>
+        }
       </p>
     } @empty {
       <p class="empty">Press the call button and speak as you would on the phone.</p>
     }
   </section>
+
+  @if (call.inCall()) {
+    <div class="composer">
+      <input #message type="text" class="message-input" placeholder="Type a message…"
+        aria-label="Type a message to the assistant" (keydown.enter)="send(message)" />
+      <button type="button" class="send" (click)="send(message)" title="Send message">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 20.5 21 12 3 3.5v6.6L15 12 3 13.9z" /></svg>
+      </button>
+    </div>
+  }
 
   <footer class="controls">
     @if (call.inCall()) {
@@ -64,4 +81,9 @@
       </button>
     }
   </footer>
+
+  <label class="option">
+    <input type="checkbox" [checked]="call.voiceInterrupt()" (change)="toggleVoiceInterrupt($event)" />
+    Interrupt by voice <span class="hint">(best with headphones)</span>
+  </label>
 </main>

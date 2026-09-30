@@ -4,6 +4,9 @@
 *.user
 *.suo
 
+# Call logs: full caller transcripts, never commit
+logs/
+
 # Visual Studio
 .vs/
 
